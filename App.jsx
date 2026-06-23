@@ -67,6 +67,20 @@ const COLORS = [
 ];
 const getColor = (id) => COLORS.find(c => c.id === id) || COLORS[0];
 const makeCode = () => Math.random().toString(36).substring(2,8).toUpperCase();
+// ── 책 검색 (Open Library API) ────────────────────────────────────────────────
+async function searchBooks(query) {
+  const res = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=10&fields=key,title,author_name,cover_i,first_publish_year`);
+  if (!res.ok) throw new Error("검색 실패");
+  const data = await res.json();
+  return (data.docs || []).map(book => ({
+    key:    book.key,
+    title:  book.title,
+    author: book.author_name?.[0] || "저자 미상",
+    year:   book.first_publish_year || "",
+    cover:  book.cover_i ? `https://covers.openlibrary.org/b/id/${book.cover_i}-M.jpg` : null,
+  }));
+}
+
 
 // ── 공통 ─────────────────────────────────────────────────────────────────────
 function Avatar({ user, size = 32 }) {
@@ -234,8 +248,69 @@ function RoomList({ user, onEnter }) {
         </div>
         <Divider />
         <div style={{ padding:"2rem 1.5rem", display:"flex", flexDirection:"column", gap:12 }}>
-          <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="책 제목 *" style={inp} autoFocus />
-          <input value={newAuthor} onChange={e=>setNewAuthor(e.target.value)} placeholder="저자 (선택)" style={inp} />
+          {/* 책 검색 */}
+          {(() => {
+            const [searchQ, setSearchQ] = useState("");
+            const [results, setResults] = useState([]);
+            const [searching, setSearching] = useState(false);
+            const [selectedBook, setSelectedBook] = useState(null);
+            const search = async () => {
+              if (!searchQ.trim()) return;
+              setSearching(true);
+              try { const r = await searchBooks(searchQ); setResults(r); } catch {}
+              finally { setSearching(false); }
+            };
+            const pick = (book) => {
+              setSelectedBook(book);
+              setNewTitle(book.title);
+              setNewAuthor(book.author);
+              setResults([]);
+              setSearchQ("");
+            };
+            return (
+              <div>
+                <div style={{ fontSize:"0.78rem", color:T.gray2, marginBottom:6, fontWeight:500 }}>책 검색</div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&search()}
+                    placeholder="책 제목으로 검색…" style={{ ...inp, flex:1 }} />
+                  <button onClick={search} disabled={searching}
+                    style={{ padding:"14px 16px", borderRadius:12, border:"none", background:T.black, color:"#fff", cursor:"pointer", fontSize:"0.88rem", fontFamily:T.fontSans, whiteSpace:"nowrap" }}>
+                    {searching?"…":"검색"}
+                  </button>
+                </div>
+                {results.length > 0 && (
+                  <div style={{ marginTop:8, border:`1px solid ${T.gray5}`, borderRadius:12, overflow:"hidden", maxHeight:260, overflowY:"auto" }}>
+                    {results.map((book, i) => (
+                      <div key={book.key} onClick={()=>pick(book)}
+                        style={{ display:"flex", gap:10, padding:"10px 12px", cursor:"pointer", background:T.white, borderBottom:i<results.length-1?`1px solid ${T.gray5}`:"none", alignItems:"center" }}>
+                        {book.cover
+                          ? <img src={book.cover} alt="" style={{ width:32, height:44, objectFit:"cover", borderRadius:4, flexShrink:0 }} />
+                          : <div style={{ width:32, height:44, background:T.surface, borderRadius:4, flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1rem" }}>📖</div>}
+                        <div style={{ minWidth:0 }}>
+                          <div style={{ fontSize:"0.88rem", fontWeight:600, color:T.black, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{book.title}</div>
+                          <div style={{ fontSize:"0.75rem", color:T.gray2, marginTop:2 }}>{book.author}{book.year?` · ${book.year}`:""}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selectedBook && (
+                  <div style={{ display:"flex", gap:10, padding:"10px 12px", background:T.surface, borderRadius:12, marginTop:6, alignItems:"center" }}>
+                    {selectedBook.cover && <img src={selectedBook.cover} alt="" style={{ width:32, height:44, objectFit:"cover", borderRadius:4, flexShrink:0 }} />}
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:"0.85rem", fontWeight:600, color:T.black, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{selectedBook.title}</div>
+                      <div style={{ fontSize:"0.75rem", color:T.gray2 }}>{selectedBook.author}</div>
+                    </div>
+                    <button onClick={()=>{setSelectedBook(null);setNewTitle("");setNewAuthor("");}} style={{ background:"none", border:"none", cursor:"pointer", color:T.gray3, fontSize:"1rem" }}>✕</button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          <div style={{ display:"flex", gap:8 }}>
+            <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="책 제목 *" style={{ ...inp, flex:2 }} />
+            <input value={newAuthor} onChange={e=>setNewAuthor(e.target.value)} placeholder="저자" style={{ ...inp, flex:1 }} />
+          </div>
           <div>
             <div style={{ fontSize:"0.78rem", color:T.gray2, marginBottom:6, fontWeight:500 }}>완독 목표일 (선택)</div>
             <input type="date" value={newDueDate} onChange={e=>setNewDueDate(e.target.value)} style={inp} />
@@ -630,6 +705,16 @@ function PostCard({ post, room, currentUser }) {
             <div style={{ fontSize:"0.88rem", fontWeight:700, color:T.black, fontFamily:T.fontSans }}>{post.authorName}</div>
             <div style={{ fontSize:"0.72rem", color:T.gray3, fontFamily:T.fontSans }}>{ago}</div>
           </div>
+          <button onClick={async()=>{
+              const ref=doc(db,"users",currentUser.uid);
+              const bookmarks=currentUser._bookmarks||[];
+              if(bookmarks.includes(post.id)){await updateDoc(ref,{bookmarks:arrayRemove(post.id)});currentUser._bookmarks=bookmarks.filter(b=>b!==post.id);}
+              else{await updateDoc(ref,{bookmarks:arrayUnion(post.id)});currentUser._bookmarks=[...bookmarks,post.id];}
+              window.dispatchEvent(new CustomEvent("bookmark-change"));
+            }}
+            style={{ background:"none", border:"none", cursor:"pointer", fontSize:"1.1rem", padding:"4px 8px", minHeight:36 }}>
+            {(currentUser._bookmarks||[]).includes(post.id) ? "🔖" : "🔖"}
+          </button>
           {isMine && (
             <div style={{ position:"relative" }}>
               <button onClick={()=>setShowMenu(p=>!p)} style={{ background:"none", border:"none", cursor:"pointer", color:T.gray3, fontSize:"1.2rem", padding:"4px 8px", minHeight:36, fontFamily:T.fontSans }}>⋯</button>
@@ -798,15 +883,196 @@ function RoomFeed({ room, user, onBack }) {
   );
 }
 
+// ── 내 서재 화면 ──────────────────────────────────────────────────────────────
+function MyLibrary({ user }) {
+  const [allRooms, setAllRooms]       = useState([]);
+  const [bookmarks, setBookmarks]     = useState([]);
+  const [allPosts, setAllPosts]       = useState([]);
+  const [tab, setTab]                 = useState("history"); // history | bookmarks
+  const [loadingPosts, setLoadingPosts] = useState(false);
+
+  // 내가 참여한 모든 모임
+  useEffect(() => {
+    const q = query(collection(db,"rooms"), where("memberUids","array-contains",user.uid));
+    return onSnapshot(q, snap => setAllRooms(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  }, [user.uid]);
+
+  // 북마크 목록
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,"users",user.uid), snap => {
+      setBookmarks(snap.data()?.bookmarks || []);
+      user._bookmarks = snap.data()?.bookmarks || [];
+    });
+    return unsub;
+  }, [user.uid]);
+
+  // 북마크된 포스트 불러오기
+  const [bookmarkedPosts, setBookmarkedPosts] = useState([]);
+  useEffect(() => {
+    if (!bookmarks.length) { setBookmarkedPosts([]); return; }
+    // 모든 모임의 posts에서 북마크된 것 찾기
+    const fetched = [];
+    let done = 0;
+    if (!allRooms.length) return;
+    allRooms.forEach(room => {
+      const q = query(collection(db,"rooms",room.id,"posts"));
+      onSnapshot(q, snap => {
+        snap.docs.forEach(d => {
+          if (bookmarks.includes(d.id)) {
+            fetched.push({ id:d.id, ...d.data(), roomTitle:room.title, roomId:room.id });
+          }
+        });
+        done++;
+        if (done === allRooms.length) setBookmarkedPosts([...fetched]);
+      });
+    });
+  }, [bookmarks, allRooms]);
+
+  const totalPosts = allRooms.reduce((s,r) => s+(r.postCount||0), 0);
+  const doneRooms  = allRooms.filter(r => r.status==="done");
+  const activeRooms= allRooms.filter(r => r.status!=="done");
+
+  return (
+    <div style={{ minHeight:"100dvh", background:T.bg, fontFamily:T.fontSans, paddingBottom:20 }}>
+      <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" rel="stylesheet" />
+
+      {/* 헤더 */}
+      <div style={{ padding:"calc(env(safe-area-inset-top,0px) + 1.25rem) 1.5rem 1rem", display:"flex", alignItems:"center", gap:12 }}>
+        <Avatar user={user} size={42} />
+        <div>
+          <div style={{ fontSize:"1rem", fontWeight:700, color:T.black }}>{user.displayName}</div>
+          <div style={{ fontSize:"0.78rem", color:T.gray3, marginTop:1 }}>교환독서 멤버</div>
+        </div>
+      </div>
+
+      {/* 통계 카드 */}
+      <div style={{ display:"flex", gap:10, padding:"0 1.5rem 1.25rem" }}>
+        {[
+          { label:"참여한 모임", value:allRooms.length },
+          { label:"완독한 책",   value:doneRooms.length },
+          { label:"내 포스트",   value:totalPosts },
+          { label:"북마크",      value:bookmarks.length },
+        ].map(s => (
+          <div key={s.label} style={{ flex:1, background:T.white, borderRadius:12, padding:"12px 8px", textAlign:"center", boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+            <div style={{ fontSize:"1.3rem", fontWeight:700, color:T.black }}>{s.value}</div>
+            <div style={{ fontSize:"0.68rem", color:T.gray3, marginTop:2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <Divider />
+
+      {/* 탭 */}
+      <div style={{ display:"flex", padding:"0.75rem 1.5rem", gap:8 }}>
+        {[{id:"history",label:"독서 기록"},{id:"bookmarks",label:"북마크"}].map(t => (
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{ flex:1, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", fontSize:"0.9rem", fontWeight:600, fontFamily:T.fontSans, background:tab===t.id?T.black:T.surface, color:tab===t.id?"#fff":T.gray2, transition:"all 0.15s" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 독서 기록 탭 */}
+      {tab === "history" && (
+        <div style={{ padding:"0 1.5rem" }}>
+          {activeRooms.length > 0 && (
+            <>
+              <div style={{ fontSize:"0.78rem", fontWeight:600, color:T.gray2, margin:"0.75rem 0 0.6rem", letterSpacing:"0.04em" }}>진행중</div>
+              {activeRooms.map(room => <RoomHistoryCard key={room.id} room={room} />)}
+            </>
+          )}
+          {doneRooms.length > 0 && (
+            <>
+              <div style={{ fontSize:"0.78rem", fontWeight:600, color:T.gray2, margin:"1.25rem 0 0.6rem", letterSpacing:"0.04em" }}>완독</div>
+              {doneRooms.map(room => <RoomHistoryCard key={room.id} room={room} done />)}
+            </>
+          )}
+          {allRooms.length === 0 && (
+            <div style={{ textAlign:"center", padding:"3rem 0", color:T.gray3 }}>
+              <div style={{ fontSize:"2rem", marginBottom:"0.75rem" }}>📚</div>
+              <div style={{ fontSize:"0.9rem" }}>아직 참여한 모임이 없어요</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 북마크 탭 */}
+      {tab === "bookmarks" && (
+        <div style={{ padding:"0.5rem 1.5rem" }}>
+          {bookmarkedPosts.length === 0 ? (
+            <div style={{ textAlign:"center", padding:"3rem 0", color:T.gray3 }}>
+              <div style={{ fontSize:"2rem", marginBottom:"0.75rem" }}>🔖</div>
+              <div style={{ fontSize:"0.9rem" }}>북마크한 포스트가 없어요</div>
+              <div style={{ fontSize:"0.8rem", color:T.gray4, marginTop:4 }}>포스트의 🔖 버튼을 눌러 저장하세요</div>
+            </div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:"0.875rem", marginTop:"0.5rem" }}>
+              {bookmarkedPosts.map(post => (
+                <div key={post.id} style={{ background:T.white, borderRadius:14, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,0.06)" }}>
+                  <div style={{ height:3, background:getColor(post.colorId).color }} />
+                  {post.type === "text" ? (
+                    <div style={{ padding:"1rem 1.1rem", background:T.surface }}>
+                      <p style={{ fontSize:"0.95rem", color:T.gray1, lineHeight:1.8, margin:0, fontStyle:"italic" }}>"{post.quote}"</p>
+                    </div>
+                  ) : post.imageDataUrl ? (
+                    <img src={post.imageDataUrl} alt="" style={{ width:"100%", maxHeight:200, objectFit:"contain", background:T.surface, display:"block" }} />
+                  ) : null}
+                  <div style={{ padding:"0.85rem 1.1rem" }}>
+                    <div style={{ fontSize:"0.72rem", color:T.gray3, marginBottom:4 }}>📖 {post.roomTitle}</div>
+                    <div style={{ fontSize:"0.82rem", fontWeight:600, color:T.black, marginBottom:2 }}>{post.authorName}</div>
+                    <p style={{ fontSize:"0.88rem", color:T.gray2, margin:0, lineHeight:1.6 }}>{post.caption}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 모임 기록 카드 (서재용) ───────────────────────────────────────────────────
+function RoomHistoryCard({ room, done }) {
+  return (
+    <div style={{ background:T.white, borderRadius:14, padding:"1rem 1.1rem", marginBottom:10, display:"flex", gap:12, alignItems:"center", boxShadow:"0 1px 4px rgba(0,0,0,0.05)", opacity:done?0.75:1 }}>
+      <div style={{ width:40, height:54, background:done?T.gray3:T.black, borderRadius:"3px 5px 5px 3px", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.1rem", flexShrink:0, boxShadow:"inset -2px 0 4px rgba(0,0,0,0.15)" }}>
+        {done?"📘":"📗"}
+      </div>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:"0.95rem", fontWeight:600, color:T.black, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{room.title}</div>
+        {room.author && <div style={{ fontSize:"0.78rem", color:T.gray2, marginTop:1 }}>{room.author}</div>}
+        <div style={{ display:"flex", gap:8, marginTop:4, fontSize:"0.72rem", color:T.gray3 }}>
+          <span>멤버 {room.memberUids?.length||1}명</span>
+          <span>·</span>
+          <span>포스트 {room.postCount||0}개</span>
+          {room.dueDate && <><span>·</span><span>{new Date(room.dueDate).toLocaleDateString("ko-KR",{month:"short",day:"numeric"})} 완독</span></>}
+        </div>
+      </div>
+      {done && <span style={{ fontSize:"0.72rem", background:T.surface, color:T.gray2, padding:"3px 8px", borderRadius:10, flexShrink:0 }}>완독 ✓</span>}
+    </div>
+  );
+}
+
 // ── 메인 ─────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [user, setUser]           = useState(null);
-  const [loading, setLoading]     = useState(true);
+  const [user, setUser]               = useState(null);
+  const [loading, setLoading]         = useState(true);
   const [currentRoom, setCurrentRoom] = useState(null);
+  const [mainTab, setMainTab]         = useState("rooms"); // rooms | library
 
   useEffect(() => {
     return onAuthStateChanged(auth, u => { setUser(u); setLoading(false); });
   }, []);
+
+  // 북마크 상태 유저 객체에 동기화
+  useEffect(() => {
+    if (!user) return;
+    const unsub = onSnapshot(doc(db,"users",user.uid), snap => {
+      user._bookmarks = snap.data()?.bookmarks || [];
+    });
+    return unsub;
+  }, [user]);
 
   if (loading) return (
     <div style={{ minHeight:"100dvh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", color:T.gray2, fontFamily:T.fontSans, fontSize:"0.95rem" }}>
@@ -817,5 +1083,32 @@ export default function App() {
 
   if (!user) return <LoginScreen />;
   if (currentRoom) return <RoomFeed room={currentRoom} user={user} onBack={()=>setCurrentRoom(null)} />;
-  return <RoomList user={user} onEnter={setCurrentRoom} />;
+
+  return (
+    <div style={{ minHeight:"100dvh", background:T.bg, fontFamily:T.fontSans }}>
+      {/* 탭 콘텐츠 */}
+      {mainTab === "rooms"
+        ? <RoomList user={user} onEnter={setCurrentRoom} />
+        : <MyLibrary user={user} />
+      }
+
+      {/* 하단 탭바 */}
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, background:T.white, borderTop:`1px solid ${T.gray5}`, display:"flex", paddingBottom:"env(safe-area-inset-bottom,0px)", zIndex:200 }}>
+        {[
+          { id:"rooms",   icon:"📚", label:"모임" },
+          { id:"library", icon:"🔖", label:"내 서재" },
+        ].map(tab => (
+          <button key={tab.id} onClick={()=>setMainTab(tab.id)}
+            style={{ flex:1, padding:"12px 0 10px", background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:3,
+              color: mainTab===tab.id ? T.black : T.gray3, fontFamily:T.fontSans }}>
+            <span style={{ fontSize:"1.3rem" }}>{tab.icon}</span>
+            <span style={{ fontSize:"0.65rem", fontWeight: mainTab===tab.id ? 700 : 400 }}>{tab.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div style={{ height:"calc(60px + env(safe-area-inset-bottom,0px))" }} />
+      <style>{`*{-webkit-tap-highlight-color:transparent;}input,textarea,button{-webkit-appearance:none;}`}</style>
+    </div>
+  );
 }
